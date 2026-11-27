@@ -173,6 +173,11 @@ func load(env getenv) (*Config, error) {
 		SecretKeyFile:     str("MDMAIL_SECRET_KEY_FILE", ""),
 		LogLevel:          strings.ToLower(str("MDMAIL_LOG_LEVEL", "info")),
 	}
+	if dd, err := absDir(c.DataDir); err != nil {
+		errs = append(errs, fmt.Errorf("MDMAIL_DATA_DIR: %w", err))
+	} else {
+		c.DataDir = dd
+	}
 	c.DKIMKeyDir = str("MDMAIL_DKIM_KEY_DIR", filepath.Join(c.DataDir, "dkim"))
 	if c.SecretKeyFile == "" {
 		c.SecretKeyFile = filepath.Join(c.DataDir, "secret.key")
@@ -245,6 +250,11 @@ func LoadForCLI() (*Config, error) {
 	if c.DataDir == "" {
 		c.DataDir = "/data"
 	}
+	dd, err := absDir(c.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("MDMAIL_DATA_DIR: %w", err)
+	}
+	c.DataDir = dd
 	c.DKIMSelector = os.Getenv("MDMAIL_DKIM_SELECTOR")
 	if c.DKIMSelector == "" {
 		c.DKIMSelector = "mdmail"
@@ -267,6 +277,21 @@ func LoadForCLI() (*Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// absDir makes the data directory absolute so that the server and the admin
+// CLI, which may run from different working directories, always agree on
+// which database they use, and so that the path can be logged unambiguously.
+func absDir(d string) (string, error) {
+	d = strings.TrimSpace(d)
+	if d == "" {
+		return "", errors.New("must not be empty")
+	}
+	a, err := filepath.Abs(d)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(a), nil
 }
 
 func validDomain(d string) bool {

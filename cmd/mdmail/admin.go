@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -24,7 +25,12 @@ func openStore() (*config.Config, *store.Store, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := store.Open(context.Background(), cfg.DBPath())
+	st, err := store.OpenExisting(context.Background(), cfg.DBPath())
+	if errors.Is(err, store.ErrNoDatabase) {
+		return nil, nil, fmt.Errorf("no mdmail database at %s\n"+
+			"  Set MDMAIL_DATA_DIR to the same absolute directory the server uses (its startup log prints \"database\"),\n"+
+			"  and start \"mdmail serve\" once before adding users", cfg.DBPath())
+	}
 	return cfg, st, err
 }
 
@@ -50,11 +56,28 @@ func readPassword(confirm bool) (string, error) {
 		}
 		return string(p1), nil
 	}
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && line == "" {
+	if term.IsTerminal(int(os.Stderr.Fd())) { // #nosec G115 -- file descriptors fit in int
+		// Interactive but stdin is not a TTY (e.g. Git Bash/mintty on
+		// Windows): the input will be visible and is read only once.
+		fmt.Fprint(os.Stderr, "Password (stdin is not a terminal, input is visible; use winpty on Git Bash): ")
+	}
+	return readPasswordLine(os.Stdin)
+}
+
+// readPasswordLine reads one password from a non-terminal reader: the first
+// line, without its line terminator ("\n" or "\r\n"). Other whitespace is
+// kept, because it is part of the password the browser will send.
+func readPasswordLine(r io.Reader) (string, error) {
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	line = strings.TrimSuffix(line, "\n")
+	line = strings.TrimSuffix(line, "\r")
+	if line == "" {
 		return "", errors.New("no password on stdin")
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	return line, nil
 }
 
 func userCmd(args []string) error {
@@ -87,7 +110,7 @@ func userCmd(args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: mdmail user %s <email>", args[0])
 	}
-	email := strings.ToLower(strings.TrimSpace(args[1]))
+	email := auth.NormalizeEmail(args[1])
 
 	if args[0] == "add" {
 		if !mailmsg.ValidAddress(email) {
@@ -112,7 +135,7 @@ func userCmd(args []string) error {
 			}
 			return err
 		}
-		fmt.Println("created", email)
+		fmt.Printf("created %s (database %s)\n", email, cfg.DBPath())
 		return nil
 	}
 

@@ -62,3 +62,30 @@ func TestFileSecrets(t *testing.T) {
 		t.Errorf("expected file error, got %v", err)
 	}
 }
+
+// Regression: a relative MDMAIL_DATA_DIR is resolved to an absolute path, so
+// the server and the admin CLI agree on the database and logs show the
+// exact location.
+func TestDataDirAbsolute(t *testing.T) {
+	c, err := load(envMap(map[string]string{
+		"MDMAIL_HOSTNAME": "mail.example.com", "MDMAIL_DOMAINS": "example.com",
+		"MDMAIL_TLS_MODE": "files", "MDMAIL_TLS_CERT_FILE": "/c", "MDMAIL_TLS_KEY_FILE": "/k",
+		"MDMAIL_DATA_DIR": "local/../local/data",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, _ := os.Getwd()
+	want := filepath.Join(wd, "local", "data")
+	if c.DataDir != want || c.DBPath() != filepath.Join(want, "mdmail.db") || c.SecretKeyFile != filepath.Join(want, "secret.key") {
+		t.Fatalf("DataDir = %q, DBPath = %q, SecretKeyFile = %q; want under %q", c.DataDir, c.DBPath(), c.SecretKeyFile, want)
+	}
+	t.Setenv("MDMAIL_DATA_DIR", "local/data")
+	cc, err := LoadForCLI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cc.DBPath() != c.DBPath() {
+		t.Fatalf("CLI DBPath %q != server DBPath %q", cc.DBPath(), c.DBPath())
+	}
+}
