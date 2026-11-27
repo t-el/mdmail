@@ -70,6 +70,7 @@ PTR record as described in [docs/deployment.md](docs/deployment.md).
 | [docs/backup.md](docs/backup.md) | Backup, restore, upgrades |
 | [docs/api.md](docs/api.md) | HTTPS JSON API reference |
 | [docs/cli.md](docs/cli.md) | Administration commands |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Login failures, local testing on localhost |
 | [SECURITY.md](SECURITY.md) | Reporting vulnerabilities |
 
 ## Building from source
