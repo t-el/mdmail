@@ -1,0 +1,51 @@
+# Production deployment of mdmail. See docs/deployment.md.
+#
+#   cp .env.example .env   # then edit
+#   docker compose up -d --build
+#
+name: mdmail
+
+services:
+  mdmail:
+    build:
+      context: .
+      args:
+        VERSION: ${MDMAIL_VERSION:-0.1.0}
+    image: mdmail:${MDMAIL_VERSION:-0.1.0}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "25:2525"    # SMTP (MX, inbound)
+      - "587:5870"   # Submission (STARTTLS, AUTH required)
+      - "465:4650"   # Submission (implicit TLS, AUTH required)
+      - "443:8443"   # HTTPS web client + API
+      - "80:8080"    # ACME http-01 challenges + redirect to HTTPS
+    volumes:
+      - mdmail-data:/data
+      # For MDMAIL_TLS_MODE=files, mount your certificates read-only:
+      # - /etc/letsencrypt:/certs:ro
+    # ---- hardening ----
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    pids_limit: 256
+    mem_limit: 1g
+    ulimits:
+      nofile: { soft: 8192, hard: 8192 }
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/mdmail", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  mdmail-data:
