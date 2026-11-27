@@ -78,6 +78,7 @@
 
   $('btn-logout').addEventListener('click', async () => {
     try { await api('POST', '/api/logout', {}); } catch (_) { /* ignore */ }
+    document.dispatchEvent(new CustomEvent('mdmail:logout'));
     showLogin();
   });
 
@@ -201,6 +202,11 @@
       r.append(el('div', { class: 'banner' }, el('span', { text: 'Remote images are blocked to protect your privacy.' }),
         el('button', { text: 'Load images', onclick: () => openMessage(id, true) })));
     }
+    if (m.tasks > 0) {
+      const panel = el('section', { class: 'checklist', 'aria-label': 'Checklist' });
+      r.append(panel);
+      loadChecklist(id, panel);
+    }
     const frame = el('iframe', {
       sandbox: 'allow-popups allow-popups-to-escape-sandbox',
       referrerpolicy: 'no-referrer',
@@ -208,6 +214,70 @@
       src: '/api/messages/' + id + '/body' + (images ? '?images=1' : ''),
     });
     r.append(frame);
+  }
+
+  // -------------------------------------------------------- checklists
+  // Task-list items are toggled here, in the application document, never
+  // inside the sandboxed (script-free) message iframe.
+  async function loadChecklist(id, panel) {
+    try {
+      renderChecklist(id, panel, await api('GET', '/api/messages/' + id + '/checklist'));
+    } catch (e) { panel.replaceChildren(el('p', { class: 'error', text: 'Checklist unavailable: ' + e.message })); }
+  }
+
+  function reloadBody() {
+    const f = $('reader').querySelector('iframe');
+    if (f) { const u = f.src; f.src = 'about:blank'; f.src = u; }
+  }
+
+  function renderChecklist(id, panel, c) {
+    if (!state.current || state.current.id !== id) return;
+    panel.replaceChildren();
+    const isSent = state.current.folder === 'Sent';
+    const head = el('div', { class: 'checklist-head' },
+      el('b', { text: 'Checklist' }),
+      el('span', { class: 'muted', text: isSent ? c.total + ' items (as sent)' : c.done + '/' + c.total + ' done' }));
+    panel.append(head);
+    if (!isSent) panel.append(el('progress', { max: String(c.total || 1), value: String(c.done), 'aria-label': 'Checklist progress' }));
+    const msg = el('p', { class: 'error', role: 'alert' });
+    const ul = el('ul', { class: 'checklist-items' });
+    for (const it of c.items) {
+      const box = el('input', { type: 'checkbox' });
+      box.checked = !!it.checked;
+      box.disabled = !c.editable;
+      box.addEventListener('change', async () => {
+        const want = box.checked;
+        box.disabled = true;
+        try {
+          const nc = await api('POST', '/api/messages/' + id + '/checklist/' + it.id, { checked: want });
+          renderChecklist(id, panel, nc);
+          reloadBody();
+        } catch (e) {
+          box.checked = !want; box.disabled = false; // nothing was stored
+          msg.textContent = e.message;
+        }
+      });
+      ul.append(el('li', { class: it.checked ? 'done' : '' }, el('label', null, box, el('span', { text: it.text || '(empty item)' }))));
+    }
+    panel.append(ul, msg);
+    if (isSent) {
+      const rec = c.recipients || [];
+      if (rec.length) {
+        const rl = el('ul', { class: 'checklist-recipients' });
+        for (const rp of rec) {
+          const done = new Set(rp.checked);
+          const names = c.items.filter((x) => done.has(x.id)).map((x) => x.text);
+          rl.append(el('li', null, el('b', { text: rp.email }), el('span', { text: ' — ' + rp.done + '/' + rp.total + ' done' }),
+            names.length ? el('div', { class: 'muted small', text: '✔ ' + names.join(' · ') }) : null));
+        }
+        panel.append(el('div', { class: 'muted small', text: 'Progress of recipients on this server:' }), rl);
+      }
+      panel.append(el('p', { class: 'muted small', text: 'Only recipients with an account on this server can share progress. Nothing is tracked for external recipients.' }));
+    } else if (c.visible_to_sender) {
+      panel.append(el('p', { class: 'muted small', text: 'The sender has an account on this server and can see which items you tick.' }));
+    } else {
+      panel.append(el('p', { class: 'muted small', text: 'Your ticks are stored only in your mailbox; the sender is not notified.' }));
+    }
   }
 
   function fmtSize(n) {
@@ -226,6 +296,12 @@
     return (text || '').split('\n').map((l) => '> ' + l).join('\n');
   }
 
+  function composeContext(o) {
+    if (o.reply_to_id) return 'reply-' + o.reply_to_id;
+    if (o.forward_id) return 'fwd-' + o.forward_id;
+    return 'new';
+  }
+
   function openCompose(opts) {
     state.compose = opts || {};
     $('compose-title').textContent = opts && opts.title ? opts.title : 'New message';
@@ -237,8 +313,12 @@
     $('c-files').value = '';
     $('c-status').textContent = '';
     $('c-forward-note').textContent = opts && opts.forward_id ? 'Original attachments will be included.' : '';
-    renderPreview();
+    $('c-preview').replaceChildren();
     $('compose').showModal();
+    // editor.js (when loaded) restores drafts and renders the live preview.
+    $('compose-form').dispatchEvent(new CustomEvent('mdmail:compose-open', {
+      detail: { user: state.user ? state.user.email : '', context: composeContext(state.compose) },
+    }));
     ($('c-to').value ? $('c-body') : $('c-to')).focus();
   }
 
@@ -273,25 +353,31 @@
     openCompose({ title: 'Forward', subject: prefix('Fwd:', p.subject), body: '\n\n' + hdr + '\n\n' + quote(p.text), forward_id: m.id });
   }
 
-  let previewTimer; let previewSeq = 0;
-  function renderPreview() {
-    clearTimeout(previewTimer);
-    previewTimer = setTimeout(async () => {
-      const seq = ++previewSeq;
-      try {
-        const r = await api('POST', '/api/preview', { markdown: $('c-body').value });
-        // The server returns HTML produced by goldmark and sanitized by a
-        // strict bluemonday allow-list; CSP additionally blocks any script.
-        if (seq === previewSeq) $('c-preview').innerHTML = r.html;
-      } catch (e) { $('c-status').textContent = e.message; }
-    }, 250);
+  // Narrow API surface for editor.js (same-origin script only, per CSP).
+  window.mdmailAPI = Object.freeze({
+    preview: async (markdown) => (await api('POST', '/api/preview', { markdown })).html,
+  });
+
+  const enhanced = () => $('c-editor').dataset.enhanced === '1';
+  function closeCompose() {
+    if (enhanced()) {
+      // The draft is autosaved on this device; closing keeps it.
+      $('compose-form').dispatchEvent(new CustomEvent('mdmail:compose-close'));
+      $('compose').close();
+      return true;
+    }
+    if ($('c-body').value.trim() && !confirm('Discard this message?')) return false;
+    $('compose').close();
+    return true;
   }
-  $('c-body').addEventListener('input', renderPreview);
-  $('compose-close').addEventListener('click', () => {
-    if ($('c-body').value.trim() && !confirm('Discard this message?')) return;
+  $('compose-close').addEventListener('click', closeCompose);
+  $('compose').addEventListener('cancel', (e) => { e.preventDefault(); closeCompose(); });
+  $('c-discard').addEventListener('click', () => {
+    if ($('c-body').value.trim() && !confirm('Discard this draft?')) return;
+    $('compose-form').dispatchEvent(new CustomEvent('mdmail:compose-discard'));
+    $('c-body').value = '';
     $('compose').close();
   });
-  $('compose').addEventListener('cancel', (e) => { if ($('c-body').value.trim() && !confirm('Discard this message?')) e.preventDefault(); });
 
   $('c-send').addEventListener('click', async () => {
     const fd = new FormData();
@@ -303,6 +389,7 @@
     $('c-send').disabled = true; $('c-status').textContent = 'Sending…';
     try {
       await api('POST', '/api/send', fd, true);
+      $('compose-form').dispatchEvent(new CustomEvent('mdmail:compose-sent'));
       $('compose').close(); loadFolders(); if (state.folder === 'Sent') loadMessages(true);
     } catch (e) {
       $('c-status').textContent = e.message;
