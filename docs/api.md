@@ -53,10 +53,12 @@ Folders are fixed: `INBOX`, `Sent`, `Archive`, `Junk`, `Trash`.
 | Method & path | Description |
 |---|---|
 | `GET /api/messages?folder=INBOX&limit=50&before=<id>&q=<text>` | Newest first. `limit` ≤ 200. `before` paginates by id. `q` searches subject/from/to. Returns `[Message]`. |
-| `GET /api/messages/{id}` | `Message` plus `parsed` (see below) and `has_remote_images`. |
+| `GET /api/messages/{id}` | `Message` plus `parsed` (see below), `has_remote_images` and `tasks` (number of task-list items). |
 | `GET /api/messages/{id}/body?images=1` | Sanitized HTML document for an `<iframe sandbox>`. Remote HTTPS images only with `images=1`. |
 | `GET /api/messages/{id}/raw` | Original RFC 5322 source as an attachment (`.eml`). |
 | `GET /api/messages/{id}/attachments/{index}` | Attachment bytes, always `application/octet-stream` + `Content-Disposition: attachment`. |
+| `GET /api/messages/{id}/checklist` | Task-list items of the message with your stored state (see [Checklists](#checklists)). |
+| `POST /api/messages/{id}/checklist/{item}` | `{"checked":bool}` — tick or untick one item of your own copy. Returns the updated checklist. |
 | `PATCH /api/messages/{id}` | `{"seen"?:bool,"flagged"?:bool,"folder"?:string}` |
 | `DELETE /api/messages/{id}` | Moves to Trash; deletes permanently if already in Trash. |
 
@@ -82,11 +84,40 @@ Folders are fixed: `INBOX`, `Sent`, `Archive`, `Junk`, `Trash`.
 All message endpoints are scoped to the logged-in user; ids of other users'
 messages return `404`.
 
+### Checklists
+
+Task-list items (`- [ ] …`, `- [x] …`, also in ordered lists and quotes) are
+read from the message's `text/plain` (Markdown) part. Each item's `id` is its
+0-based position among all task items in the document; it is the same as the
+position of the matching checkbox in the HTML part that mdmail renders from
+that Markdown. At most 500 items per message are tracked.
+
+```json
+{"items":[{"id":0,"text":"tag v1","checked":true},{"id":1,"text":"write notes","checked":false}],
+ "done":1,"total":2,"editable":true,"visible_to_sender":true,
+ "recipients":[{"email":"bob@example.com","done":1,"total":2,"checked":[0]}]}
+```
+
+- `checked` is your stored state when you toggled the item, otherwise the
+  state written in the message.
+- `editable` is `false` for messages in `Sent` (a sender's copy is
+  read-only; toggling it returns `409`).
+- `visible_to_sender` tells a recipient that the sender is a local user who
+  can see this progress (only with `MDMAIL_CHECKLIST_SHARING=true`).
+- `recipients` appears only on your own `Sent` copies and lists local
+  recipients on this server with their progress. External recipients never
+  appear.
+
+`POST …/checklist/{item}` errors: `400` (bad item or body), `403` (CSRF /
+origin check), `404` (not your message, or no such item), `409` (Sent copy),
+`429` (more than about 4 toggles per second). On any error nothing is
+stored. The `/body` document shows the same state as disabled checkboxes.
+
 ## Composing
 
 | Method & path | Description |
 |---|---|
-| `POST /api/preview` | `{"markdown"}` → `{"html"}` — sanitized HTML fragment, exactly as it will be sent. |
+| `POST /api/preview` | `{"markdown"}` → `{"html"}` — sanitized HTML fragment, exactly as it will be sent (same renderer and sanitizer as the `text/html` part). Markdown ≤ 2 MiB (`413` above), per-user limit of about 5 requests per second (`429`). |
 | `POST /api/send` | `multipart/form-data` (see below) → `{"ok":true}` |
 
 `/api/send` fields:

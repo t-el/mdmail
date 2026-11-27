@@ -58,8 +58,13 @@ volumetric network DoS (use your provider's protection).
   `Permissions-Policy`. API responses are `Cache-Control: no-store`.
 - Requests for any `Host` other than `MDMAIL_HOSTNAME` (or the MTA-STS hosts)
   are refused, defeating DNS-rebinding and host-header attacks.
-- JSON bodies are limited to 256 KiB with unknown fields rejected; uploads are
-  streamed into memory with hard limits (no temp files).
+- JSON bodies are limited to 256 KiB with unknown fields rejected (the
+  preview endpoint allows the 2 MiB Markdown limit); uploads are streamed
+  into memory with hard limits (no temp files).
+- Static assets (`app.js`, `editor.js`, `app.css`) are embedded in the binary
+  and served with pinned `Content-Type`s (not the host MIME database) plus
+  `nosniff`; any other file type under `/static/` is `404`. The page has no
+  inline script, style or event handler.
 
 ### Displaying untrusted mail
 - Received HTML is sanitized with a bluemonday allow-list: no scripts, styles,
@@ -76,7 +81,38 @@ volumetric network DoS (use your provider's protection).
   `Content-Disposition: attachment`, sanitized filenames and a sandbox CSP.
 - The UI inserts all text with `textContent`. The only `innerHTML` use is the
   compose preview, which is server-rendered Markdown sanitized by the same
-  strict policy used for outgoing mail.
+  strict policy used for outgoing mail. `/api/preview` requires a session and
+  CSRF token, is limited per user and capped at 2 MiB.
+- Received HTML may keep task-list checkboxes only: every `<input>` that is not
+  a checkbox is removed after sanitizing, and all checkboxes are rendered
+  `disabled`. Toggling happens in the application page, never inside the
+  script-free message iframe.
+
+### Checklists and privacy
+- Checklist state is stored only in this server's database, per stored copy
+  (so per message and per recipient), and is deleted with the message.
+- A toggle is a `POST` with the session CSRF token and same-origin check; the
+  database write is conditional on the caller owning that message copy, so
+  another user's message id yields `404` and changes nothing. Item numbers are
+  validated against the message, Sent copies are read-only, and toggles are
+  rate-limited per user. (`checklist_test.go`, `checklists_test.go`)
+- **Nothing is ever sent to other servers.** Ticking an item sends no mail,
+  read receipt, callback, or request to the sender; mdmail adds no tracking
+  pixels or unique links. Mail to external recipients stays plain GFM, and
+  what they tick in their own client is invisible to you.
+- **Local sharing** (`MDMAIL_CHECKLIST_SHARING`, default `true`): when the
+  sender and recipient are both users of this server, the sender's Sent view
+  shows each local recipient's progress and which items they ticked. The
+  link between the Sent copy and the delivered copies is recorded at
+  submission time and never inferred from `Message-ID` headers, which anyone
+  can forge. The recipient's checklist says when the sender can see it. A
+  recipient who deletes the message removes it from the sender's view. Set
+  `MDMAIL_CHECKLIST_SHARING=false` to turn sharing off: no links are recorded
+  for new mail and existing ones are no longer shown.
+- **Drafts** are autosaved only in the browser's `localStorage` on that device
+  (never on the server). They are removed when the message is sent or
+  discarded and when you sign out. On a shared computer, sign out or use a
+  private window.
 
 ### Outgoing mail
 - Markdown is rendered by goldmark **without raw HTML** and then sanitized by
@@ -161,3 +197,9 @@ their last 50 events under *Settings*.
 - No aliases, forwarding rules or custom folders.
 - Single-node design (SQLite). Scale vertically.
 - DMARC aggregate reports are not generated (they are received like any mail).
+- Checklists are read from the Markdown/plain-text part only. HTML-only mail
+  shows its checkboxes but cannot be ticked. For foreign HTML whose
+  checkboxes do not line up with the plain-text task list, the body keeps the
+  sender's original boxes and only the checklist panel shows your state.
+- The web client needs JavaScript. Without `editor.js` the compose form is a
+  plain textarea that still sends, but there is no live preview.

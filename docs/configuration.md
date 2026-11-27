@@ -53,6 +53,7 @@ Set any address to an empty string to disable that listener.
 | `MDMAIL_INBOUND_REQUIRE_TLS` | `false` | Refuse inbound mail on port 25 without STARTTLS. Breaks delivery from the minority of servers without TLS. |
 | `MDMAIL_DMARC_ENFORCE` | `true` | Reject (550) inbound mail failing DMARC with `p=reject`. When `false` such mail goes to Junk. `p=quarantine` always goes to Junk. |
 | `MDMAIL_OUTBOUND_TLS` | `encrypt` | `verify`: require STARTTLS with a valid certificate for the MX name. `encrypt`: require STARTTLS, accept any certificate (protects against passive eavesdropping; most MX certificates do not match their names). `opportunistic`: use STARTTLS when offered, otherwise plaintext. |
+| `MDMAIL_CHECKLIST_SHARING` | `true` | Let a sender who is a user of this server see the checklist progress of recipients who are also users of this server. Never affects external recipients and never sends anything off the server. See [security.md](security.md#checklists-and-privacy). |
 | `MDMAIL_ALLOW_PRIVATE_MX` | `false` | Allow delivery to MX hosts resolving to private/loopback/link-local addresses. Keep `false` in production (SSRF protection). |
 
 ## DKIM

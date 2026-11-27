@@ -12,6 +12,20 @@ live Markdown preview. It ships as a distroless, non-root Docker image.
   `multipart/alternative`: `text/plain` carries the Markdown source,
   `text/html` is rendered by [goldmark](https://github.com/yuin/goldmark) and
   sanitized with a strict [bluemonday](https://github.com/microcosm-cc/bluemonday) allow-list.
+- **Live split-pane editor** — Markdown on the left, preview on the right,
+  updated as you type and rendered by the server through the *same*
+  goldmark + bluemonday path as outgoing mail, so the preview is exactly what
+  recipients get. Toolbar, slash commands (`/table`, `/code`, `/todo`,
+  `/quote`, `/link`, `/heading`), shortcuts (Ctrl/⌘+B, I, K; Ctrl/⌘+Enter to
+  send), draft autosave on the device, and Write/Preview tabs on phones. If
+  the editor script does not load, compose falls back to a plain textarea.
+- **Interactive checklists** — GFM task lists (`- [ ]` / `- [x]`) in received
+  mail become checkboxes you can tick; the state is stored per message and
+  per recipient on your own server. When sender and recipient are both users
+  of the same server, the sender's Sent view shows progress ("2/5 done", and
+  by whom). Nothing is ever reported to other servers — no pixels, no
+  callbacks; external recipients just get plain GFM. See
+  [docs/security.md](docs/security.md#checklists-and-privacy).
 - **SMTP** — inbound MX on port 25 (STARTTLS), submission on 587 (STARTTLS)
   and 465 (implicit TLS). AUTH is required and never offered over plaintext.
   No open relay.
@@ -22,7 +36,7 @@ live Markdown preview. It ships as a distroless, non-root Docker image.
   policy, exponential back-off for 5 days, bounces to the local sender, SSRF
   protection against MX records pointing at private addresses.
 - **Web client** — inbox/folders, search, read (HTML in a sandboxed iframe,
-  remote images blocked by default), compose with live preview, reply /
+  remote images blocked by default), compose with the live editor, reply /
   reply-all / forward (with attachments), attachments, flags, archive / junk /
   trash, account settings. Plain HTML + vanilla JS embedded in the binary.
 - **Security** — argon2id passwords, optional TOTP 2FA (secrets encrypted at
