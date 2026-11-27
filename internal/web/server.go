@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -39,20 +40,26 @@ type Server struct {
 	// serve HTTPS). Tests may disable it.
 	SecureCookies bool
 
-	ipLimit    *ratelimit.Keyed
-	loginLimit *ratelimit.Keyed
+	ipLimit      *ratelimit.Keyed
+	loginLimit   *ratelimit.Keyed
+	previewLimit *ratelimit.Keyed // per user
+	taskLimit    *ratelimit.Keyed // per user
 }
 
 // New creates the web server.
 func New(cfg *config.Config, st *store.Store, a *auth.Authenticator, m *mailer.Mailer, al *audit.Logger, log *slog.Logger) *Server {
 	return &Server{Cfg: cfg, St: st, Auth: a, Mailer: m, Audit: al, Log: log.With("component", "web"), SecureCookies: true,
-		ipLimit:    ratelimit.New(50*time.Millisecond, 100), // 20 req/s sustained, burst 100
-		loginLimit: ratelimit.New(12*time.Second, 10),       // 5/min sustained, burst 10
+		ipLimit:      ratelimit.New(50*time.Millisecond, 100), // 20 req/s sustained, burst 100
+		loginLimit:   ratelimit.New(12*time.Second, 10),       // 5/min sustained, burst 10
+		previewLimit: ratelimit.New(200*time.Millisecond, 20), // 5/s sustained, burst 20
+		taskLimit:    ratelimit.New(250*time.Millisecond, 20), // 4/s sustained, burst 20
 	}
 }
 
 // Limiters returns the rate limiters for periodic GC.
-func (s *Server) Limiters() []*ratelimit.Keyed { return []*ratelimit.Keyed{s.ipLimit, s.loginLimit} }
+func (s *Server) Limiters() []*ratelimit.Keyed {
+	return []*ratelimit.Keyed{s.ipLimit, s.loginLimit, s.previewLimit, s.taskLimit}
+}
 
 // Handler builds the complete HTTP handler.
 func (s *Server) Handler() http.Handler {
@@ -80,6 +87,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/messages/{id}/body", s.authed(s.handleBody))
 	mux.HandleFunc("GET /api/messages/{id}/raw", s.authed(s.handleRaw))
 	mux.HandleFunc("GET /api/messages/{id}/attachments/{idx}", s.authed(s.handleAttachment))
+	mux.HandleFunc("GET /api/messages/{id}/checklist", s.authed(s.handleChecklist))
+	mux.HandleFunc("POST /api/messages/{id}/checklist/{item}", s.authed(s.handleChecklistToggle))
 	mux.HandleFunc("PATCH /api/messages/{id}", s.authed(s.handleUpdate))
 	mux.HandleFunc("DELETE /api/messages/{id}", s.authed(s.handleDelete))
 	mux.HandleFunc("POST /api/preview", s.authed(s.handlePreview))
@@ -103,9 +112,28 @@ func noDirListing(h http.Handler) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		ct, ok := staticTypes[path.Ext(r.URL.Path)]
+		if !ok {
+			http.NotFound(w, r) // only known asset types are served
+			return
+		}
+		w.Header().Set("Content-Type", ct)
 		w.Header().Set("Cache-Control", "no-cache")
 		h.ServeHTTP(w, r)
 	})
+}
+
+// staticTypes pins the Content-Type of every embedded asset type instead of
+// relying on the host's MIME database (absent in distroless images).
+// Together with X-Content-Type-Options: nosniff, a script or style sheet is
+// only ever executed or applied with its correct type.
+var staticTypes = map[string]string{
+	".js":   "text/javascript; charset=utf-8",
+	".css":  "text/css; charset=utf-8",
+	".html": "text/html; charset=utf-8",
+	".svg":  "image/svg+xml",
+	".png":  "image/png",
+	".ico":  "image/x-icon",
 }
 
 // mainCSP applies to the application shell. No inline script or style is
@@ -200,11 +228,15 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 const maxJSONBody = 256 << 10
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	return decodeJSONLimit(w, r, v, maxJSONBody)
+}
+
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		writeErr(w, http.StatusUnsupportedMediaType, "expected application/json")
 		return false
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		var mbe *http.MaxBytesError

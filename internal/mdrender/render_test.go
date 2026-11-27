@@ -38,7 +38,7 @@ func TestRenderEmailHTMLEscapesTitle(t *testing.T) {
 
 func TestSanitizeIncoming(t *testing.T) {
 	in := `<div style="background:url(https://track.example/p.gif)" onclick="x()">Hi <img src="https://track.example/pixel.gif"> <img src="data:image/png;base64,iVBORw0KGgo="><a href="https://example.com">l</a><form action="https://evil"><input name=p></form><iframe src="https://evil"></iframe><style>body{}</style></div>`
-	out, remote := SanitizeIncoming(in, false)
+	out, remote := SanitizeIncoming(in, false, nil)
 	if !remote {
 		t.Error("remote content not detected")
 	}
@@ -53,7 +53,7 @@ func TestSanitizeIncoming(t *testing.T) {
 	if !strings.Contains(out, `rel="nofollow noreferrer noopener"`) || !strings.Contains(out, `target="_blank"`) {
 		t.Errorf("link not hardened: %s", out)
 	}
-	withImages, _ := SanitizeIncoming(in, true)
+	withImages, _ := SanitizeIncoming(in, true, nil)
 	if !strings.Contains(withImages, "https://track.example/pixel.gif") {
 		t.Error("images not allowed when requested")
 	}

@@ -96,6 +96,7 @@ type messageView struct {
 	*store.Message
 	Parsed          *mailmsg.Parsed `json:"parsed"`
 	HasRemoteImages bool            `json:"has_remote_images"`
+	Tasks           int             `json:"tasks"` // number of task-list items
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
@@ -108,8 +109,8 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
 		writeErr(w, http.StatusUnprocessableEntity, "message could not be parsed; download the raw source instead")
 		return
 	}
-	_, remote := mdrender.SanitizeIncoming(p.HTML, false)
-	writeJSON(w, http.StatusOK, messageView{Message: m, Parsed: p, HasRemoteImages: remote})
+	_, remote := mdrender.SanitizeIncoming(p.HTML, false, nil)
+	writeJSON(w, http.StatusOK, messageView{Message: m, Parsed: p, HasRemoteImages: remote, Tasks: len(mdrender.Tasks(p.Text))})
 }
 
 // handleBody serves a message body as a standalone, sandboxed HTML document
@@ -128,7 +129,12 @@ func (s *Server) handleBody(w http.ResponseWriter, r *http.Request, rc *reqCtx) 
 	images := r.URL.Query().Get("images") == "1"
 	var body string
 	if p.HasHTML {
-		body, _ = mdrender.SanitizeIncoming(p.HTML, images)
+		tasks, err := s.effectiveTasks(r.Context(), rc.user.ID, m, p)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		body, _ = mdrender.SanitizeIncoming(p.HTML, images, taskStates(tasks))
 	} else {
 		body = mdrender.TextToHTML(p.Text)
 	}
@@ -156,6 +162,7 @@ func (s *Server) handleBody(w http.ResponseWriter, r *http.Request, rc *reqCtx) 
 const bodyCSS = `body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1f2328;margin:0;padding:16px;word-wrap:break-word}` +
 	`pre{white-space:pre-wrap;background:#f6f8fa;padding:12px;border-radius:6px}pre.plain{background:none;padding:0;font-family:inherit}code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:90%}` +
 	`blockquote{margin:0;padding:0 1em;color:#59636e;border-left:.25em solid #d1d9e0}table{border-collapse:collapse;max-width:100%}th,td{border:1px solid #d1d9e0;padding:4px 8px}img{max-width:100%;height:auto}a{color:#0969da}` +
+	`ul:has(>li>input[type=checkbox]){list-style:none;padding-left:1.4em}li>input[type=checkbox]{margin:0 .45em 0 -1.4em;vertical-align:middle}` +
 	`@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}pre,code{background:#161b22}a{color:#4493f8}th,td{border-color:#30363d}}`
 
 func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
@@ -245,11 +252,27 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, rc *reqCtx
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, _ *reqCtx) {
+// maxPreviewBody bounds the JSON request of /api/preview: the largest
+// Markdown that can be sent, plus room for JSON string escaping.
+const maxPreviewBody = 2*mdrender.MaxMarkdownBytes + 4096
+
+// handlePreview renders Markdown exactly as handleSend will for the
+// text/html part (same goldmark configuration, same bluemonday policy), so
+// the live preview matches what recipients receive.
+func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
+	if !s.previewLimit.Allow(strconv.FormatInt(rc.user.ID, 10)) {
+		w.Header().Set("Retry-After", "2")
+		writeErr(w, http.StatusTooManyRequests, "too many preview requests")
+		return
+	}
 	var req struct {
 		Markdown string `json:"markdown"`
 	}
-	if !decodeJSON(w, r, &req) {
+	if !decodeJSONLimit(w, r, &req, maxPreviewBody) {
+		return
+	}
+	if len(req.Markdown) > mdrender.MaxMarkdownBytes {
+		writeErr(w, http.StatusRequestEntityTooLarge, "message body too large")
 		return
 	}
 	h, err := mdrender.RenderFragment(req.Markdown)

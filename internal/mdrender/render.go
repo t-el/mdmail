@@ -98,6 +98,11 @@ func incomingPolicy(allowRemoteImages bool) *bluemonday.Policy {
 	p.AllowAttrs("colspan", "rowspan").Matching(bluemonday.Integer).OnElements("td", "th")
 	p.AllowAttrs("color").Matching(regexp.MustCompile(`^#?[0-9a-zA-Z]{1,20}$`)).OnElements("font")
 	p.AllowAttrs("alt").OnElements("img")
+	// Task-list checkboxes. Any <input> that is not a checkbox is removed
+	// afterwards by NormalizeCheckboxes, and all checkboxes are disabled.
+	p.AllowAttrs("type").Matching(regexp.MustCompile(`^(?i:checkbox)$`)).OnElements("input")
+	p.AllowAttrs("checked").Matching(regexp.MustCompile(`^(|checked)$`)).OnElements("input")
+	p.AllowElements("input")
 	if allowRemoteImages {
 		p.AllowAttrs("src").Matching(regexp.MustCompile(`^(https://|data:image/(png|gif|jpeg|webp);base64,)`)).OnElements("img")
 	} else {
@@ -116,13 +121,18 @@ var (
 
 // SanitizeIncoming sanitizes untrusted HTML. Remote images are removed unless
 // allowRemoteImages is true. It also reports whether the original contained
-// remote resources (to offer a "load images" action).
-func SanitizeIncoming(h string, allowRemoteImages bool) (clean string, hadRemote bool) {
+// remote resources (to offer a "load images" action). The only form
+// controls kept are disabled task-list checkboxes; taskStates, when it
+// matches the number of checkboxes, overrides their checked state (see
+// NormalizeCheckboxes).
+func SanitizeIncoming(h string, allowRemoteImages bool, taskStates []bool) (clean string, hadRemote bool) {
 	hadRemote = remoteImgRe.MatchString(h) || cssURLRe.MatchString(h)
+	p := policyNoImages
 	if allowRemoteImages {
-		return policyWithImages.Sanitize(h), hadRemote
+		p = policyWithImages
 	}
-	return policyNoImages.Sanitize(h), hadRemote
+	clean, _ = NormalizeCheckboxes(p.Sanitize(h), taskStates)
+	return clean, hadRemote
 }
 
 // TextToHTML renders a plain-text body for display: escaped, with URLs linkified.
