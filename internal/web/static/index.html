@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>mdmail</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:,">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<div id="login" class="screen hidden">
+  <form id="login-form" class="card login-card" autocomplete="on">
+    <h1>mdmail</h1>
+    <label>Email <input id="login-email" type="email" autocomplete="username" required maxlength="254"></label>
+    <label>Password <input id="login-password" type="password" autocomplete="current-password" required maxlength="1024"></label>
+    <label id="totp-row" class="hidden">Authenticator code <input id="login-totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6"></label>
+    <button type="submit" class="primary">Sign in</button>
+    <p id="login-error" class="error" role="alert"></p>
+  </form>
+</div>
+
+<div id="app" class="screen hidden">
+  <header class="topbar">
+    <span class="brand">mdmail</span>
+    <input id="search" type="search" placeholder="Search subject, sender, recipient" maxlength="200">
+    <span class="spacer"></span>
+    <button id="btn-compose" class="primary">Compose</button>
+    <button id="btn-settings">Settings</button>
+    <button id="btn-logout">Sign out</button>
+  </header>
+  <div class="layout">
+    <nav id="folders" class="folders" aria-label="Folders"></nav>
+    <section class="list-pane">
+      <div class="list-actions"><button id="btn-empty" class="hidden">Empty folder</button></div>
+      <ul id="messages" class="messages"></ul>
+      <button id="btn-more" class="hidden more">Load more</button>
+    </section>
+    <section id="reader" class="reader">
+      <p class="placeholder">Select a message</p>
+    </section>
+  </div>
+</div>
+
+<dialog id="compose" class="compose">
+  <form id="compose-form" method="dialog">
+    <div class="compose-head">
+      <h2 id="compose-title">New message</h2>
+      <button type="button" id="compose-close" aria-label="Close">✕</button>
+    </div>
+    <label>To <input id="c-to" maxlength="5000" autocomplete="off"></label>
+    <label>Cc <input id="c-cc" maxlength="5000" autocomplete="off"></label>
+    <label>Bcc <input id="c-bcc" maxlength="5000" autocomplete="off"></label>
+    <label>Subject <input id="c-subject" maxlength="900"></label>
+    <div class="editor">
+      <div class="pane">
+        <div class="pane-title">Markdown</div>
+        <textarea id="c-body" spellcheck="true" placeholder="Write in **Markdown**…"></textarea>
+      </div>
+      <div class="pane">
+        <div class="pane-title">Preview</div>
+        <div id="c-preview" class="preview md"></div>
+      </div>
+    </div>
+    <div class="compose-foot">
+      <input id="c-files" type="file" multiple>
+      <span id="c-forward-note" class="muted"></span>
+      <span class="spacer"></span>
+      <span id="c-status" class="muted" role="status"></span>
+      <button type="button" id="c-send" class="primary">Send</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings" class="settings">
+  <div class="compose-head">
+    <h2>Settings</h2>
+    <button type="button" id="settings-close" aria-label="Close">✕</button>
+  </div>
+  <section>
+    <h3>Change password</h3>
+    <form id="pw-form" class="stack">
+      <input id="pw-current" type="password" placeholder="Current password" autocomplete="current-password" required>
+      <input id="pw-new" type="password" placeholder="New password (min. 12 characters)" autocomplete="new-password" minlength="12" required>
+      <button type="submit">Change password</button>
+    </form>
+  </section>
+  <section>
+    <h3>Two-factor authentication</h3>
+    <p id="totp-status" class="muted"></p>
+    <div id="totp-off" class="stack hidden">
+      <input id="totp-pw" type="password" placeholder="Current password" autocomplete="current-password">
+      <button id="totp-setup">Set up authenticator app</button>
+      <div id="totp-pending" class="stack hidden">
+        <p>Add this key to your authenticator app, then enter the 6-digit code:</p>
+        <code id="totp-secret" class="secret"></code>
+        <code id="totp-uri" class="secret small"></code>
+        <input id="totp-code" inputmode="numeric" maxlength="6" placeholder="123456">
+        <button id="totp-enable" class="primary">Enable</button>
+      </div>
+    </div>
+    <div id="totp-on" class="stack hidden">
+      <input id="totp-dis-pw" type="password" placeholder="Current password" autocomplete="current-password">
+      <input id="totp-dis-code" inputmode="numeric" maxlength="6" placeholder="Authenticator code">
+      <button id="totp-disable">Disable two-factor authentication</button>
+    </div>
+  </section>
+  <section>
+    <h3>App passwords (SMTP)</h3>
+    <p class="muted" id="smtp-info"></p>
+    <ul id="ap-list" class="plain-list"></ul>
+    <form id="ap-form" class="stack">
+      <input id="ap-name" placeholder="Device name, e.g. Laptop Thunderbird" maxlength="60" required>
+      <input id="ap-pw" type="password" placeholder="Current password" autocomplete="current-password" required>
+      <button type="submit">Create app password</button>
+    </form>
+    <code id="ap-new" class="secret hidden"></code>
+  </section>
+  <section>
+    <h3>Sessions</h3>
+    <button id="revoke-sessions">Sign out all other sessions</button>
+  </section>
+  <section>
+    <h3>Recent security events</h3>
+    <table class="events"><thead><tr><th>Time (UTC)</th><th>Event</th><th>IP</th></tr></thead><tbody id="events"></tbody></table>
+  </section>
+  <p id="settings-msg" class="muted" role="status"></p>
+</dialog>
+</body>
+</html>
