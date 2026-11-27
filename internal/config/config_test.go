@@ -23,7 +23,7 @@ func TestLoadValid(t *testing.T) {
 	if !c.IsLocalDomain("EXAMPLE.org.") || c.IsLocalDomain("evil.com") {
 		t.Error("IsLocalDomain wrong")
 	}
-	if c.MaxMessageBytes != 25<<20 || c.OutboundTLS != OutboundTLSEncrypt || !c.DMARCEnforce {
+	if c.MaxMessageBytes != 25<<20 || c.OutboundTLS != OutboundTLSEncrypt || !c.DMARCEnforce || !c.ChecklistSharing {
 		t.Error("defaults wrong")
 	}
 }
@@ -36,6 +36,7 @@ func TestLoadErrors(t *testing.T) {
 		"public health":    {"MDMAIL_HOSTNAME": "mail.example.com", "MDMAIL_DOMAINS": "example.com", "MDMAIL_HEALTH_ADDR": "0.0.0.0:9090"},
 		"bad size":         {"MDMAIL_HOSTNAME": "mail.example.com", "MDMAIL_DOMAINS": "example.com", "MDMAIL_MAX_MESSAGE_BYTES": "1"},
 		"files w/o cert":   {"MDMAIL_HOSTNAME": "mail.example.com", "MDMAIL_DOMAINS": "example.com", "MDMAIL_TLS_MODE": "files"},
+		"bad sharing":      {"MDMAIL_HOSTNAME": "mail.example.com", "MDMAIL_DOMAINS": "example.com", "MDMAIL_CHECKLIST_SHARING": "maybe"},
 	}
 	for name, env := range cases {
 		if _, err := load(envMap(env)); err == nil {

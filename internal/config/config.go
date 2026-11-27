@@ -65,6 +65,11 @@ type Config struct {
 	MTASTSMode   string // none|testing|enforce
 	MTASTSMaxAge time.Duration
 
+	// ChecklistSharing lets a local sender see checklist progress of
+	// recipients who are local users of this server. Nothing is ever sent
+	// to other servers; see docs/security.md.
+	ChecklistSharing bool
+
 	SecretKeyFile string
 	LogLevel      string
 }
@@ -170,6 +175,7 @@ func load(env getenv) (*Config, error) {
 		SessionIdle:       duration("MDMAIL_SESSION_IDLE", 30*time.Minute, time.Minute),
 		MTASTSMode:        strings.ToLower(str("MDMAIL_MTASTS_MODE", "none")),
 		MTASTSMaxAge:      duration("MDMAIL_MTASTS_MAX_AGE", 7*24*time.Hour, time.Hour),
+		ChecklistSharing:  boolean("MDMAIL_CHECKLIST_SHARING", true),
 		SecretKeyFile:     str("MDMAIL_SECRET_KEY_FILE", ""),
 		LogLevel:          strings.ToLower(str("MDMAIL_LOG_LEVEL", "info")),
 	}

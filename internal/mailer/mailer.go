@@ -127,7 +127,8 @@ func (m *Mailer) Submit(ctx context.Context, u *store.User, rcpts []string, raw 
 		return fmt.Errorf("dkim sign: %w", err)
 	}
 
-	if _, err := m.store(ctx, u.ID, store.FolderSent, signed, "", true); err != nil {
+	sentID, err := m.store(ctx, u.ID, store.FolderSent, signed, "", true)
+	if err != nil {
 		return err
 	}
 	for _, r := range local {
@@ -140,8 +141,16 @@ func (m *Mailer) Submit(ctx context.Context, u *store.User, rcpts []string, raw 
 		if err != nil {
 			return err
 		}
-		if _, err := m.store(ctx, ru.ID, store.FolderInbox, withTrace, "local", false); err != nil {
+		rcptID, err := m.store(ctx, ru.ID, store.FolderInbox, withTrace, "local", false)
+		if err != nil {
 			return err
+		}
+		if m.Cfg.ChecklistSharing {
+			// Best effort: without the link the sender simply sees no
+			// progress for this recipient (fails closed).
+			if err := m.St.LinkLocalDelivery(ctx, sentID, rcptID); err != nil {
+				m.Log.ErrorContext(ctx, "could not link local delivery", "err", err)
+			}
 		}
 	}
 	if len(remote) > 0 {
