@@ -138,6 +138,30 @@ Write a message in Markdown to `bob@mdmail.localhost` and send it. Then sign
 out, sign in as bob, and it is in his Inbox. A private window lets you be
 signed in as both users at once.
 
+Things to try in the editor:
+
+- Type `/` at the start of a line for blocks: `/table`, `/code`, `/todo`,
+  `/quote`, `/link`, `/heading` (arrow keys, then Enter or Tab).
+- Ctrl/⌘+B, Ctrl/⌘+I and Ctrl/⌘+K for bold, italic and link; Ctrl/⌘+Enter
+  sends.
+- The preview on the right is rendered by the server exactly as recipients
+  will see it. On a narrow window it becomes Write / Preview tabs.
+- Close the compose window and open it again: the draft is kept in this
+  browser until you send or discard it, or sign out.
+
+To try checklists, send bob a message with a task list:
+
+```markdown
+- [ ] tag the release
+- [x] write the notes
+- [ ] announce it
+```
+
+As bob, tick items in the **Checklist** box above the message. Then sign in
+as alice and open the message in **Sent**: it shows "bob@mdmail.localhost —
+2/3 done". Both users are on the same server, so this works locally; mail to
+other servers never reports anything back.
+
 ## 8. Test SMTP submission from the command line
 
 Mail clients and scripts send through port 5870 (STARTTLS) or 4650 (TLS),
