@@ -1,0 +1,8 @@
+.git
+.github
+.env
+*.db
+*.db-*
+data
+docs
+*.md

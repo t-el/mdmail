@@ -1,0 +1,18 @@
+# Secrets and local configuration
+.env
+*.pem
+*.key
+secret.key
+
+# Data
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Build output
+/mdmail
+/bin/
+*.test
+*.out
+coverage.*
