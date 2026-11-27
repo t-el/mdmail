@@ -16,3 +16,9 @@ secret.key
 *.test
 *.out
 coverage.*
+
+# Local run (docs/local.md)
+/local.env
+/local/
+/mdmail.exe
+/mail.txt

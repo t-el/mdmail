@@ -30,56 +30,8 @@ knows the exact reason. To see it:
      address).
    - "too many login attempts": the per-IP rate limit; wait a minute.
 
-## Running locally (no Docker)
+## Running locally
 
-All values go in one file that **both** terminals source, so the server and
-the admin commands always use the same absolute data directory.
-
-```sh
-git pull && go build -trimpath -o mdmail ./cmd/mdmail
-mkdir -p local
-openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
-  -keyout local/key.pem -out local/cert.pem -subj "/CN=mail.mdmail.localhost" \
-  -addext "subjectAltName=DNS:mail.mdmail.localhost"
-
-cat > local/env.sh <<ENV
-export MDMAIL_HOSTNAME=mail.mdmail.localhost
-export MDMAIL_DOMAINS=mdmail.localhost
-export MDMAIL_TLS_MODE=files
-export MDMAIL_TLS_CERT_FILE=$PWD/local/cert.pem
-export MDMAIL_TLS_KEY_FILE=$PWD/local/key.pem
-export MDMAIL_DATA_DIR=$PWD/local/data
-export MDMAIL_SMTP_ADDR=:2525 MDMAIL_SUBMISSION_ADDR=:5870 MDMAIL_SUBMISSIONS_ADDR=:4650
-export MDMAIL_HTTPS_ADDR=:8443 MDMAIL_HTTP_ADDR=:8080
-export MDMAIL_LOG_LEVEL=debug
-ENV
-```
-
-`$PWD` is expanded **once, when the file is written**, so the file contains
-absolute paths and works from any directory.
-
-Terminal 1:
-
-```sh
-. local/env.sh && ./mdmail serve      # note the "database" path it logs
-```
-
-Terminal 2 (after the server has started once):
-
-```sh
-. /path/to/mdmail/local/env.sh
-./mdmail user add taha@mdmail.localhost --admin   # prints "created … (database …)"
-./mdmail user list
-```
-
-Open `https://mail.mdmail.localhost:8443/` (accept the self-signed
-certificate). Chrome, Edge and Firefox resolve `*.localhost` to the loopback
-address. Other browsers and tools may not: add
-`127.0.0.1 mail.mdmail.localhost` to `/etc/hosts` (Windows:
-`C:\Windows\System32\drivers\etc\hosts`). Do not use `https://localhost:8443`
-or `https://127.0.0.1:8443`; the server answers only to `MDMAIL_HOSTNAME`.
-
-On Windows with Git Bash, run admin commands through `winpty`
-(`winpty ./mdmail user add …`) so that the password prompt is hidden and asked
-twice. Under WSL 2 run both terminals inside WSL; a Windows browser reaches
-the server through `localhost` forwarding.
+See [local.md](local.md) for running mdmail on `localhost`: one shared
+`local.env` file for the server and the admin commands, the self-signed
+certificate, and browser and hosts-file notes.
