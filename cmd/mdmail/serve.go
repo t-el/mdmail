@@ -44,7 +44,7 @@ func serve() error {
 	}
 	logger := newLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
-	logger.Info("starting mdmail", "version", version, "hostname", cfg.Hostname, "domains", cfg.Domains)
+	logger.Info("starting mdmail", "version", version, "hostname", cfg.Hostname, "domains", cfg.Domains, "database", cfg.DBPath())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

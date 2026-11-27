@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,9 +26,28 @@ import (
 )
 
 type testEnv struct {
-	ts  *httptest.Server
-	st  *store.Store
-	srv *Server
+	ts   *httptest.Server
+	st   *store.Store
+	srv  *Server
+	logs *syncBuf
+}
+
+// syncBuf is a goroutine-safe log sink for asserting on server-side logs.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 func setup(t *testing.T) *testEnv {
@@ -42,7 +62,8 @@ func setup(t *testing.T) *testEnv {
 	cfg := &config.Config{Hostname: "127.0.0.1", Domains: []string{"example.com"}, MaxMessageBytes: 1 << 20, MaxRecipients: 10,
 		SubmitPerHour: 100, SessionTTL: time.Hour, SessionIdle: 30 * time.Minute, MTASTSMode: "enforce", MTASTSMaxAge: 24 * time.Hour}
 	box, _, _ := auth.LoadOrCreateKey(filepath.Join(dir, "key"))
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logs := &syncBuf{}
+	log := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	signer, _, _ := mailauth.LoadSigner(dir, "s", nil)
 	al := audit.New(st, log)
 	m := mailer.New(cfg, st, signer, al, log)
@@ -56,7 +77,7 @@ func setup(t *testing.T) *testEnv {
 			t.Fatal(err)
 		}
 	}
-	return &testEnv{ts: ts, st: st, srv: srv}
+	return &testEnv{ts: ts, st: st, srv: srv, logs: logs}
 }
 
 type client struct {
@@ -383,3 +404,150 @@ func TestAccountTOTPAndAppPasswords(t *testing.T) {
 func jsonInt(i int64) string { return url.PathEscape(strings.TrimSpace(string(mustJSON(i)))) }
 
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
+
+// Regression for "login always says invalid email, password or code":
+// request-integrity failures must be distinguishable from bad credentials on
+// the client, while the precise credential failure reason (unknown user,
+// wrong password, lockout) is only logged server-side.
+func TestLoginErrorsAreDistinctAndLogged(t *testing.T) {
+	e := setup(t)
+	post := func(body string, mod func(*http.Request)) (int, apiError) {
+		t.Helper()
+		resp := e.client(t).do("POST", "/api/login", strings.NewReader(body), "application/json", mod)
+		defer resp.Body.Close()
+		var ae apiError
+		raw, _ := io.ReadAll(resp.Body)
+		_ = json.Unmarshal(raw, &ae)
+		for _, leak := range []string{auth.ReasonUnknownUser, auth.ReasonBadPassword, auth.ReasonLocked, "MDMAIL_HOSTNAME", "evil.example"} {
+			if strings.Contains(string(raw), leak) {
+				t.Fatalf("response leaks %q: %s", leak, raw)
+			}
+		}
+		return resp.StatusCode, ae
+	}
+
+	// Unknown user (e.g. created in another database) vs wrong password:
+	// same client response, different server-side reason.
+	code, ae := post(`{"email":"nobody@example.com","password":"password-alice"}`, nil)
+	if code != 401 || ae.Code != codeLoginFailed || ae.Error != msgLoginFailed {
+		t.Fatalf("unknown user: %d %+v", code, ae)
+	}
+	if !strings.Contains(e.logs.String(), "reason="+auth.ReasonUnknownUser) {
+		t.Fatalf("unknown-user reason not logged:\n%s", e.logs.String())
+	}
+	code, ae = post(`{"email":"alice@example.com","password":"wrong-password-1"}`, nil)
+	if code != 401 || ae.Code != codeLoginFailed {
+		t.Fatalf("wrong password: %d %+v", code, ae)
+	}
+	if !strings.Contains(e.logs.String(), "reason="+auth.ReasonBadPassword) {
+		t.Fatal("wrong-password reason not logged")
+	}
+
+	// Cross-site and foreign-origin requests get a distinct message/code.
+	code, ae = post(`{"email":"alice@example.com","password":"password-alice"}`, func(r *http.Request) {
+		r.Header.Set("Origin", "https://evil.example")
+		r.Header.Set("Sec-Fetch-Site", "cross-site")
+	})
+	if code != 403 || ae.Code != codeOrigin || ae.Error == msgLoginFailed {
+		t.Fatalf("cross-site login: %d %+v", code, ae)
+	}
+	code, ae = post(`{"email":"alice@example.com","password":"password-alice"}`, func(r *http.Request) {
+		r.Header.Set("Origin", "https://evil.example")
+		r.Header.Del("Sec-Fetch-Site")
+	})
+	if code != 403 || ae.Code != codeOrigin {
+		t.Fatalf("foreign origin login: %d %+v", code, ae)
+	}
+	if !strings.Contains(e.logs.String(), "login refused by origin check") || !strings.Contains(e.logs.String(), "evil.example") {
+		t.Fatal("origin refusal not logged with its reason")
+	}
+	code, _ = post(`{"email":"alice@example.com","password":"password-alice"}`, func(r *http.Request) {
+		r.Header.Del("Origin")
+		r.Header.Del("Sec-Fetch-Site")
+	})
+	if code != 403 {
+		t.Fatalf("login without any origin signal: %d", code)
+	}
+
+	// "Origin: null" (same-origin POST under Referrer-Policy: no-referrer in
+	// spec-following browsers) is accepted when Sec-Fetch-Site vouches for it.
+	code, _ = post(`{"email":"alice@example.com","password":"password-alice"}`, func(r *http.Request) {
+		r.Header.Set("Origin", "null")
+	})
+	if code != 200 {
+		t.Fatalf("Origin: null + Sec-Fetch-Site: same-origin: %d", code)
+	}
+
+	// Lockout: correct password still gets the generic message, but the log
+	// says why.
+	for i := 0; i < auth.LockThreshold; i++ {
+		post(`{"email":"bob@example.com","password":"wrong-password-1"}`, nil)
+	}
+	code, ae = post(`{"email":"bob@example.com","password":"password-bob"}`, nil)
+	if code != 401 || ae.Code != codeLoginFailed {
+		t.Fatalf("locked: %d %+v", code, ae)
+	}
+	if !strings.Contains(e.logs.String(), "reason="+auth.ReasonLocked) {
+		t.Fatal("lockout reason not logged")
+	}
+
+	// CSRF failures on authenticated endpoints have their own code.
+	c := e.client(t)
+	c.login("alice@example.com", "password-alice")
+	c.csrf = "wrong-token-wrong-token"
+	var ce apiError
+	if code := c.json("POST", "/api/logout", map[string]string{}, &ce); code != 403 || ce.Code != codeCSRF || ce.Error == msgLoginFailed {
+		t.Fatalf("csrf: %d %+v", code, ce)
+	}
+	if !strings.Contains(e.logs.String(), "X-CSRF-Token does not match session") {
+		t.Fatal("csrf reason not logged")
+	}
+}
+
+// Regression: production settings (HTTPS, Secure + __Host- cookie) on a
+// non-443 port, the way a local test at https://host:8443 runs. The browser
+// sends "Origin: https://host:8443"; the port must not fail the check.
+func TestLoginOverHTTPSNonDefaultPort(t *testing.T) {
+	e := setup(t)
+	e.srv.SecureCookies = true
+	ts := httptest.NewTLSServer(e.srv.Handler())
+	defer ts.Close()
+	if !strings.Contains(ts.URL, "https://127.0.0.1:") || strings.HasSuffix(ts.URL, ":443") {
+		t.Fatalf("unexpected test URL %s", ts.URL)
+	}
+	jar, _ := cookiejar.New(nil)
+	hc := ts.Client()
+	hc.Jar = jar
+	c := &client{t: t, base: ts.URL, hc: hc}
+
+	// GET the page first, as a browser does.
+	resp := c.do("GET", "/", nil, "", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /: %d", resp.StatusCode)
+	}
+	resp = c.do("POST", "/api/login", strings.NewReader(`{"email":"alice@example.com","password":"password-alice"}`), "application/json", nil)
+	var sr sessionResp
+	_ = json.NewDecoder(resp.Body).Decode(&sr)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("login over https on a non-443 port: %d\n%s", resp.StatusCode, e.logs.String())
+	}
+	sc := resp.Header.Get("Set-Cookie")
+	for _, want := range []string{"__Host-mdmail=", "Path=/", "HttpOnly", "Secure", "SameSite=Strict"} {
+		if !strings.Contains(sc, want) {
+			t.Fatalf("Set-Cookie %q lacks %q", sc, want)
+		}
+	}
+	if strings.Contains(strings.ToLower(sc), "domain=") {
+		t.Fatalf("__Host- cookie must not carry Domain: %q", sc)
+	}
+	c.csrf = sr.CSRF
+	var folders []map[string]any
+	if code := c.json("GET", "/api/folders", nil, &folders); code != 200 || len(folders) == 0 {
+		t.Fatalf("authenticated request after login: %d", code)
+	}
+	if code := c.json("POST", "/api/logout", map[string]string{}, nil); code != 200 {
+		t.Fatalf("CSRF-protected request over https: %d", code)
+	}
+}

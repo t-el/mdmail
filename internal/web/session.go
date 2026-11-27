@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,20 +65,37 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 
 // sameOrigin verifies that a state-changing request was issued by our own
 // origin (defence in depth on top of SameSite=Strict and the CSRF token).
-func (s *Server) sameOrigin(r *http.Request) bool {
-	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
-		return false
+// It returns a short server-side reason when the check fails; the reason is
+// for logs only and is never sent to the client.
+func (s *Server) sameOrigin(r *http.Request) (ok bool, reason string) {
+	sfs := r.Header.Get("Sec-Fetch-Site")
+	if sfs != "" && sfs != "same-origin" {
+		return false, "sec-fetch-site=" + sfs
 	}
 	origin := r.Header.Get("Origin")
-	if origin == "" {
-		// Browsers always send Origin on CORS-mode and non-GET fetches.
-		return r.Header.Get("Sec-Fetch-Site") == "same-origin"
+	if origin == "" || origin == "null" {
+		// Browsers send Origin on every non-GET fetch, but a same-origin
+		// POST from a page with Referrer-Policy: no-referrer is sent as
+		// "Origin: null" by spec-following browsers (Fetch §3.1). The
+		// browser-controlled Sec-Fetch-Site header then decides.
+		if sfs == "same-origin" {
+			return true, ""
+		}
+		return false, "missing origin (origin=" + strconv.Quote(origin) + ", no sec-fetch-site)"
 	}
 	u, err := url.Parse(origin)
-	if err != nil {
-		return false
+	if err != nil || u.Host == "" {
+		return false, "unparseable origin " + strconv.Quote(origin)
 	}
-	return u.Scheme == "https" && strings.EqualFold(u.Hostname(), s.Cfg.Hostname) || (!s.SecureCookies && strings.EqualFold(u.Hostname(), s.Cfg.Hostname))
+	if !strings.EqualFold(u.Hostname(), s.Cfg.Hostname) {
+		return false, "origin host " + strconv.Quote(u.Hostname()) + " != MDMAIL_HOSTNAME " + strconv.Quote(s.Cfg.Hostname)
+	}
+	// Any port is accepted: the listener port (e.g. :8443 behind NAT or in
+	// local testing) is not part of the trust decision, the host name is.
+	if u.Scheme != "https" && s.SecureCookies {
+		return false, "origin scheme " + strconv.Quote(u.Scheme) + " is not https"
+	}
+	return true, ""
 }
 
 func isSafeMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
@@ -110,8 +128,17 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *reqCtx)) htt
 		}
 		if !isSafeMethod(r.Method) {
 			tok := r.Header.Get("X-CSRF-Token")
-			if !s.sameOrigin(r) || subtle.ConstantTimeCompare([]byte(tok), []byte(sess.CSRF)) != 1 {
-				writeErr(w, http.StatusForbidden, "CSRF check failed")
+			reason := ""
+			if ok, why := s.sameOrigin(r); !ok {
+				reason = why
+			} else if tok == "" {
+				reason = "missing X-CSRF-Token"
+			} else if subtle.ConstantTimeCompare([]byte(tok), []byte(sess.CSRF)) != 1 {
+				reason = "X-CSRF-Token does not match session"
+			}
+			if reason != "" {
+				s.Log.DebugContext(ctx, "request refused by CSRF protection", "path", r.URL.Path, "reason", reason, "ip", clientIP(r))
+				writeJSON(w, http.StatusForbidden, apiError{Error: msgSecurityCheck, Code: codeCSRF})
 				return
 			}
 		}
@@ -144,14 +171,29 @@ func viewOf(u *store.User) userView {
 	return userView{Email: u.Email, TOTPEnabled: u.TOTPEnabled, IsAdmin: u.IsAdmin}
 }
 
+// Client-facing login error messages and codes. Credential failures share
+// one message (no account enumeration, and a lockout is not disclosed);
+// request-integrity failures get a distinct one so that a misconfigured
+// origin or a stale page is not mistaken for a wrong password.
+const (
+	msgLoginFailed   = "invalid email, password or code"
+	msgSecurityCheck = "request blocked by a security check (cross-site or stale page); reload the page from the server's own address and try again"
+	codeLoginFailed  = "invalid_credentials"
+	codeCSRF         = "csrf_failed"
+	codeOrigin       = "origin_rejected"
+)
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !s.sameOrigin(r) {
-		writeErr(w, http.StatusForbidden, "cross-origin login refused")
+	ctx := r.Context()
+	if ok, why := s.sameOrigin(r); !ok {
+		s.Log.DebugContext(ctx, "login refused by origin check", "reason", why, "ip", ip,
+			"origin", r.Header.Get("Origin"), "sec_fetch_site", r.Header.Get("Sec-Fetch-Site"), "host", r.Host)
+		writeJSON(w, http.StatusForbidden, apiError{Error: msgSecurityCheck, Code: codeOrigin})
 		return
 	}
 	if !s.loginLimit.Allow(ip) {
-		s.Audit.Event(r.Context(), 0, "login_rate_limited", ip, "")
+		s.Audit.Event(ctx, 0, "login_rate_limited", ip, "")
 		w.Header().Set("Retry-After", "60")
 		writeErr(w, http.StatusTooManyRequests, "too many login attempts, try again later")
 		return
@@ -164,7 +206,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	ctx := r.Context()
 	u, err := s.Auth.Login(ctx, req.Email, req.Password, req.TOTP, true)
 	if err != nil {
 		var uid int64
@@ -175,8 +216,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, auth.ErrTOTPRequired):
 			writeJSON(w, http.StatusUnauthorized, apiError{Error: "enter your authenticator code", Code: "totp_required"})
 		case errors.Is(err, auth.ErrInvalid), errors.Is(err, auth.ErrLocked):
+			reason := auth.FailureReason(err)
 			s.Audit.Event(ctx, uid, "login_failure", ip, err.Error())
-			writeErr(w, http.StatusUnauthorized, "invalid email, password or code")
+			s.Log.DebugContext(ctx, "login failed", "reason", reason, "email", auth.NormalizeEmail(req.Email),
+				"user_id", uid, "ip", ip, "detail", err.Error())
+			writeJSON(w, http.StatusUnauthorized, apiError{Error: msgLoginFailed, Code: codeLoginFailed})
 		default:
 			s.internalError(w, r, err)
 		}

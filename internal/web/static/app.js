@@ -33,7 +33,9 @@
     if (ct.startsWith('application/json')) data = await res.json();
     if (res.status === 401 && path !== '/api/login') { showLogin(); }
     if (!res.ok) {
-      const err = new Error((data && data.error) || ('HTTP ' + res.status));
+      let msg = data && data.error;
+      if (!msg && res.status === 421) msg = 'this address does not match the server name (MDMAIL_HOSTNAME); open mdmail at its configured address';
+      const err = new Error(msg || ('HTTP ' + res.status));
       err.code = data && data.code; err.status = res.status;
       throw err;
     }
