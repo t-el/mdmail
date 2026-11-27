@@ -142,3 +142,75 @@ func TestLoginLockoutAndTOTP(t *testing.T) {
 		t.Fatalf("app password: %v", err)
 	}
 }
+
+// Regression: every failed login maps to the generic sentinels (one client
+// message) but carries a distinct server-side reason, so an operator can tell
+// "unknown user / wrong database" from "wrong password" from "locked".
+func TestLoginFailureReasons(t *testing.T) {
+	a, st := newAuth(t)
+	ctx := context.Background()
+	h, _ := HashPassword("a-very-good-password")
+	id, err := st.CreateUser(ctx, "alice@example.com", h, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(name string, err error, sentinel error, reason string) {
+		t.Helper()
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("%s: err = %v, want %v", name, err, sentinel)
+		}
+		if got := FailureReason(err); got != reason {
+			t.Fatalf("%s: reason = %q, want %q", name, got, reason)
+		}
+	}
+	_, err = a.Login(ctx, "  ", "x", "", true)
+	check("empty email", err, ErrInvalid, ReasonBadEmail)
+	_, err = a.Login(ctx, "nobody@example.com", "a-very-good-password", "", true)
+	check("unknown user", err, ErrInvalid, ReasonUnknownUser)
+	_, err = a.Login(ctx, "alice@example.com", "wrong-password-123", "", true)
+	check("wrong password", err, ErrInvalid, ReasonBadPassword)
+	_, err = a.LoginSMTP(ctx, "alice@example.com", "wrong-password-123")
+	check("smtp wrong password", err, ErrInvalid, ReasonBadPassword)
+	_, err = a.LoginSMTP(ctx, "nobody@example.com", "x")
+	check("smtp unknown user", err, ErrInvalid, ReasonUnknownUser)
+
+	// The attempt that crosses the threshold reports the lock end.
+	var last error
+	for i := 2; i < LockThreshold; i++ {
+		_, last = a.Login(ctx, "alice@example.com", "wrong-password-123", "", true)
+	}
+	var le *LoginError
+	if !errors.As(last, &le) || le.Until.IsZero() {
+		t.Fatalf("threshold attempt should carry lock end: %v", last)
+	}
+	// A correct password during the lock is refused as "locked".
+	_, err = a.Login(ctx, "alice@example.com", "a-very-good-password", "", true)
+	check("locked", err, ErrLocked, ReasonLocked)
+	if errors.Is(err, ErrInvalid) {
+		t.Fatal("locked must not match ErrInvalid")
+	}
+	// SetPassword (mdmail user passwd) clears the lock.
+	h2, _ := HashPassword("another-good-password")
+	if err := st.SetPassword(ctx, id, h2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Login(ctx, "Alice@Example.com ", "another-good-password", "", true); err != nil {
+		t.Fatalf("login after passwd: %v", err)
+	}
+	if err := st.SetDisabled(ctx, id, true); err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.Login(ctx, "alice@example.com", "another-good-password", "", true)
+	check("disabled", err, ErrInvalid, ReasonDisabled)
+
+	// A corrupt stored hash is an internal error, not a credential failure.
+	if err := st.SetDisabled(ctx, id, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetPassword(ctx, id, "$argon2id$garbage"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Login(ctx, "alice@example.com", "another-good-password", "", true); err == nil || errors.Is(err, ErrInvalid) {
+		t.Fatalf("corrupt hash: err = %v, want internal error", err)
+	}
+}

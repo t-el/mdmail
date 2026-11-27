@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -139,5 +140,35 @@ func TestBackup(t *testing.T) {
 	defer b.Close()
 	if _, err := b.UserByEmail(ctx, "a@example.com"); err != nil {
 		t.Fatal("backup is missing data")
+	}
+}
+
+// Regression: admin tools must not silently create a second, empty database
+// when MDMAIL_DATA_DIR points somewhere the server does not use.
+func TestOpenExisting(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "sub", "mdmail.db")
+	if _, err := OpenExisting(ctx, p); !errors.Is(err, ErrNoDatabase) {
+		t.Fatalf("missing db: err = %v, want ErrNoDatabase", err)
+	}
+	if _, err := os.Stat(filepath.Dir(p)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("OpenExisting created the data directory")
+	}
+	st, err := Open(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateUser(ctx, "a@example.com", "h", false); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	st2, err := OpenExisting(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if _, err := st2.UserByEmail(ctx, "a@example.com"); err != nil {
+		t.Fatalf("existing db not opened: %v", err)
 	}
 }

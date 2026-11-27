@@ -29,6 +29,67 @@ var (
 	ErrTOTPRequired = errors.New("totp code required")
 )
 
+// Failure reasons carried by *LoginError. They are for server-side logs and
+// the audit trail only and must never be sent to clients.
+const (
+	ReasonUnknownUser = "unknown_user"
+	ReasonBadEmail    = "malformed_email"
+	ReasonDisabled    = "account_disabled"
+	ReasonBadPassword = "wrong_password"
+	ReasonBadTOTP     = "wrong_totp_code"
+	ReasonTOTPOnSMTP  = "account_password_refused_2fa_enabled"
+	ReasonLocked      = "account_locked"
+)
+
+// LoginError is a failed login. It matches ErrInvalid or ErrLocked with
+// errors.Is (so callers keep a single generic client response) and carries
+// the precise reason for operators.
+type LoginError struct {
+	Kind   error     // ErrInvalid or ErrLocked
+	Reason string    // one of the Reason* constants
+	Until  time.Time // lockout end, when known
+}
+
+func (e *LoginError) Error() string {
+	if !e.Until.IsZero() {
+		return e.Kind.Error() + " (" + e.Reason + " until " + e.Until.UTC().Format(time.RFC3339) + ")"
+	}
+	return e.Kind.Error() + " (" + e.Reason + ")"
+}
+
+// Unwrap lets errors.Is match the generic sentinel.
+func (e *LoginError) Unwrap() error { return e.Kind }
+
+// FailureReason returns the server-side reason of a login error, or "" when
+// err is not a *LoginError.
+func FailureReason(err error) string {
+	var le *LoginError
+	if errors.As(err, &le) {
+		return le.Reason
+	}
+	return ""
+}
+
+func invalid(reason string) error { return &LoginError{Kind: ErrInvalid, Reason: reason} }
+
+func locked(until time.Time) error {
+	return &LoginError{Kind: ErrLocked, Reason: ReasonLocked, Until: until}
+}
+
+// failure records a failed attempt and returns the resulting error: when this
+// attempt triggers a lockout the caller learns it (server-side) immediately.
+func (a *Authenticator) failure(ctx context.Context, u *store.User, reason string) error {
+	until, err := a.St.RecordLoginFailure(ctx, u.ID, LockThreshold, LockBase, LockMax)
+	if err != nil {
+		return err
+	}
+	le := &LoginError{Kind: ErrInvalid, Reason: reason}
+	if !until.IsZero() {
+		le.Until = until
+	}
+	return le
+}
+
 // Authenticator implements the login policy shared by the web UI and SMTP AUTH.
 type Authenticator struct {
 	St  *store.Store
@@ -48,42 +109,40 @@ func NewAuthenticator(st *store.Store, box *Box) *Authenticator {
 // requireTOTP=false there; see docs/security.md (app passwords are not
 // implemented; TOTP users authenticate SMTP with their password).
 func (a *Authenticator) Login(ctx context.Context, email, password, totpCode string, requireTOTP bool) (*store.User, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
+	email = NormalizeEmail(email)
 	if len(email) > 254 || email == "" {
 		BurnTime(password)
-		return nil, ErrInvalid
+		return nil, invalid(ReasonBadEmail)
 	}
 	u, err := a.St.UserByEmail(ctx, email)
 	if errors.Is(err, store.ErrNotFound) {
 		BurnTime(password)
-		return nil, ErrInvalid
+		return nil, invalid(ReasonUnknownUser)
 	}
 	if err != nil {
 		return nil, err
 	}
 	if time.Now().Before(u.LockedUntil) {
 		BurnTime(password)
-		return u, ErrLocked
+		return u, locked(u.LockedUntil)
 	}
 	if u.Disabled {
 		BurnTime(password)
-		return u, ErrInvalid
+		return u, invalid(ReasonDisabled)
 	}
 	if err := VerifyPassword(u.PasswordHash, password); err != nil {
-		if _, ferr := a.St.RecordLoginFailure(ctx, u.ID, LockThreshold, LockBase, LockMax); ferr != nil {
-			return nil, ferr
+		if errors.Is(err, ErrMismatch) {
+			return u, a.failure(ctx, u, ReasonBadPassword)
 		}
-		return u, ErrInvalid
+		// A corrupt stored hash is an operator problem, not a guess.
+		return nil, fmt.Errorf("auth: verify password for user %d: %w", u.ID, err)
 	}
 	if requireTOTP && u.TOTPEnabled {
 		if totpCode == "" {
 			return u, ErrTOTPRequired
 		}
 		if !a.CheckTOTP(u, totpCode) {
-			if _, ferr := a.St.RecordLoginFailure(ctx, u.ID, LockThreshold, LockBase, LockMax); ferr != nil {
-				return nil, ferr
-			}
-			return u, ErrInvalid
+			return u, a.failure(ctx, u, ReasonBadTOTP)
 		}
 	}
 	if u.FailedLogins > 0 {
@@ -93,6 +152,11 @@ func (a *Authenticator) Login(ctx context.Context, email, password, totpCode str
 	}
 	return u, nil
 }
+
+// NormalizeEmail is the canonical form of a login/account address. The CLI
+// and every login path must use it so that accounts created with
+// "mdmail user add" are found by web and SMTP logins.
+func NormalizeEmail(email string) string { return strings.ToLower(strings.TrimSpace(email)) }
 
 // CheckTOTP verifies a code for a user with TOTP enabled, rejecting reuse of
 // an already-accepted time step.
@@ -156,20 +220,24 @@ func HashAppPassword(p string) []byte {
 // account password is accepted only when TOTP is not enabled, so that
 // enabling 2FA cannot be bypassed through SMTP.
 func (a *Authenticator) LoginSMTP(ctx context.Context, email, password string) (*store.User, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
+	email = NormalizeEmail(email)
+	if len(email) > 254 || email == "" {
+		BurnTime(password)
+		return nil, invalid(ReasonBadEmail)
+	}
 	u, err := a.St.UserByEmail(ctx, email)
 	if errors.Is(err, store.ErrNotFound) {
 		BurnTime(password)
-		return nil, ErrInvalid
+		return nil, invalid(ReasonUnknownUser)
 	}
 	if err != nil {
 		return nil, err
 	}
 	if time.Now().Before(u.LockedUntil) {
-		return u, ErrLocked
+		return u, locked(u.LockedUntil)
 	}
 	if u.Disabled {
-		return u, ErrInvalid
+		return u, invalid(ReasonDisabled)
 	}
 	if ok, err := a.St.MatchAppPassword(ctx, u.ID, HashAppPassword(password)); err != nil {
 		return nil, err
@@ -179,16 +247,17 @@ func (a *Authenticator) LoginSMTP(ctx context.Context, email, password string) (
 		}
 		return u, nil
 	}
+	reason := ReasonBadPassword
 	if u.TOTPEnabled {
 		BurnTime(password)
-	} else if VerifyPassword(u.PasswordHash, password) == nil {
+		reason = ReasonTOTPOnSMTP
+	} else if err := VerifyPassword(u.PasswordHash, password); err == nil {
 		if u.FailedLogins > 0 {
 			_ = a.St.ResetLoginFailures(ctx, u.ID)
 		}
 		return u, nil
+	} else if !errors.Is(err, ErrMismatch) {
+		return nil, fmt.Errorf("auth: verify password for user %d: %w", u.ID, err)
 	}
-	if _, ferr := a.St.RecordLoginFailure(ctx, u.ID, LockThreshold, LockBase, LockMax); ferr != nil {
-		return nil, ferr
-	}
-	return u, ErrInvalid
+	return u, a.failure(ctx, u, reason)
 }

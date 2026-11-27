@@ -34,6 +34,27 @@ type Store struct {
 	db *sql.DB
 }
 
+// ErrNoDatabase is returned by OpenExisting when the database file is missing.
+var ErrNoDatabase = errors.New("store: database does not exist")
+
+// OpenExisting opens the database at path only if it already exists. Admin
+// tools use it so that a wrong MDMAIL_DATA_DIR (for example a relative path
+// resolved from another directory) fails loudly instead of silently creating
+// a second, empty database that the running server never reads.
+func OpenExisting(ctx context.Context, path string) (*Store, error) {
+	fi, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s", ErrNoDatabase, path)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("store: %s is not a regular file", path)
+	}
+	return Open(ctx, path)
+}
+
 // Open opens (creating if necessary) the database at path and applies migrations.
 func Open(ctx context.Context, path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
