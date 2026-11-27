@@ -1,0 +1,32 @@
+# Local testing overlay: runs mdmail on this machine only, for
+# https://mail.mdmail.localhost:8443 with a self-signed certificate.
+# Never use it on a public server. See docs/local.md.
+#
+#   docker compose -p mdmail-local -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#
+# Requires Docker Compose v2.24.4 or newer (!reset / !override).
+services:
+  mdmail:
+    env_file: !reset []
+    environment:
+      MDMAIL_HOSTNAME: mail.mdmail.localhost
+      MDMAIL_DOMAINS: mdmail.localhost
+      MDMAIL_TLS_MODE: files
+      MDMAIL_TLS_CERT_FILE: /certs/cert.pem
+      MDMAIL_TLS_KEY_FILE: /certs/key.pem
+      MDMAIL_MTASTS_MODE: none
+      MDMAIL_LOG_LEVEL: debug
+    # Loopback only, unprivileged host ports (same numbers as the native run).
+    ports: !override
+      - "127.0.0.1:2525:2525"
+      - "127.0.0.1:5870:5870"
+      - "127.0.0.1:4650:4650"
+      - "127.0.0.1:8443:8443"
+      - "127.0.0.1:8080:8080"
+    volumes: !override
+      - mdmail-local-data:/data
+      - ./local/cert.pem:/certs/cert.pem:ro
+      - ./local/key.pem:/certs/key.pem:ro
+
+volumes:
+  mdmail-local-data:

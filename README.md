@@ -34,6 +34,17 @@ live Markdown preview. It ships as a distroless, non-root Docker image.
 - **Storage** — SQLite (pure Go, no CGO) with embedded migrations; messages
   stored verbatim as MIME. Online backups with `mdmail backup`.
 
+## Run locally
+
+Try mdmail on your own computer in a few minutes, without Docker, DNS or a
+public server. Build the binary, create a self-signed certificate for
+`mail.mdmail.localhost`, put the settings in **one `local.env` file** that
+both terminals load, start `mdmail serve`, add two users, and open
+`https://mail.mdmail.localhost:8443`.
+
+**→ [docs/local.md](docs/local.md)**: step by step for macOS, Linux, WSL,
+Git Bash and PowerShell, plus SMTP tests and an optional local Docker run.
+
 ## Quick start (Docker)
 
 Requirements: a server with a public IPv4 address, ports 25/80/443/465/587
@@ -64,6 +75,7 @@ PTR record as described in [docs/deployment.md](docs/deployment.md).
 
 | Document | Contents |
 |---|---|
+| [docs/local.md](docs/local.md) | Run locally on `localhost` without Docker |
 | [docs/deployment.md](docs/deployment.md) | Server prerequisites, DNS (MX, SPF, DKIM, DMARC, PTR, MTA-STS), Docker deployment, mail clients |
 | [docs/configuration.md](docs/configuration.md) | Every environment variable |
 | [docs/security.md](docs/security.md) | Threat model, controls, hardening checklist |
