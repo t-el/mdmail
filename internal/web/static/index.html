@@ -8,8 +8,10 @@
 <link rel="stylesheet" href="/static/app.css">
 <link rel="icon" href="data:,">
 <script src="/static/app.js" defer></script>
+<script src="/static/editor.js" defer></script>
 </head>
 <body>
+<noscript><p class="noscript">The mdmail web client needs JavaScript enabled.</p></noscript>
 <div id="login" class="screen hidden">
   <form id="login-form" class="card login-card" autocomplete="on">
     <h1>mdmail</h1>
@@ -53,14 +55,36 @@
     <label>Cc <input id="c-cc" maxlength="5000" autocomplete="off"></label>
     <label>Bcc <input id="c-bcc" maxlength="5000" autocomplete="off"></label>
     <label>Subject <input id="c-subject" maxlength="900"></label>
-    <div class="editor">
-      <div class="pane">
-        <div class="pane-title">Markdown</div>
-        <textarea id="c-body" spellcheck="true" placeholder="Write in **Markdown**…"></textarea>
+    <div class="editor" id="c-editor" data-view="write">
+      <div class="editor-tabs" role="tablist" aria-label="Editor view">
+        <button type="button" id="tab-write" role="tab" aria-selected="true" aria-controls="c-body">Write</button>
+        <button type="button" id="tab-preview" role="tab" aria-selected="false" aria-controls="c-preview">Preview</button>
       </div>
-      <div class="pane">
-        <div class="pane-title">Preview</div>
-        <div id="c-preview" class="preview md"></div>
+      <div id="c-toolbar" class="toolbar hidden" role="toolbar" aria-label="Formatting" aria-controls="c-body">
+        <button type="button" data-cmd="bold" title="Bold (Ctrl/⌘+B)" aria-label="Bold"><b>B</b></button>
+        <button type="button" data-cmd="italic" title="Italic (Ctrl/⌘+I)" aria-label="Italic"><i>I</i></button>
+        <button type="button" data-cmd="strike" title="Strikethrough" aria-label="Strikethrough"><s>S</s></button>
+        <button type="button" data-cmd="heading" title="Heading (/heading)" aria-label="Heading">H</button>
+        <button type="button" data-cmd="quote" title="Quote (/quote)" aria-label="Quote">❝</button>
+        <button type="button" data-cmd="code" title="Code (/code)" aria-label="Code">&lt;/&gt;</button>
+        <button type="button" data-cmd="link" title="Link (Ctrl/⌘+K, /link)" aria-label="Link">🔗</button>
+        <button type="button" data-cmd="ul" title="Bulleted list" aria-label="Bulleted list">•</button>
+        <button type="button" data-cmd="ol" title="Numbered list" aria-label="Numbered list">1.</button>
+        <button type="button" data-cmd="todo" title="Checklist item (/todo)" aria-label="Checklist item">☑</button>
+        <button type="button" data-cmd="table" title="Table (/table)" aria-label="Table">▦</button>
+        <span class="spacer"></span>
+        <span class="muted small hint">Type <code>/</code> for blocks · Ctrl/⌘+Enter to send</span>
+      </div>
+      <div class="panes">
+        <div class="pane pane-write">
+          <div class="pane-title">Markdown</div>
+          <textarea id="c-body" name="markdown" spellcheck="true" placeholder="Write in **Markdown**…" aria-label="Message (Markdown)"></textarea>
+          <ul id="c-slash" class="slash-menu hidden" role="listbox" aria-label="Insert block"></ul>
+        </div>
+        <div class="pane pane-preview">
+          <div class="pane-title">Preview <span class="muted small">(exactly as recipients see it)</span></div>
+          <div id="c-preview" class="preview md" aria-live="polite"></div>
+        </div>
       </div>
     </div>
     <div class="compose-foot">
@@ -68,7 +92,8 @@
       <span id="c-forward-note" class="muted"></span>
       <span class="spacer"></span>
       <span id="c-status" class="muted" role="status"></span>
-      <button type="button" id="c-send" class="primary">Send</button>
+      <button type="button" id="c-discard">Discard</button>
+      <button type="button" id="c-send" class="primary" title="Send (Ctrl/⌘+Enter)">Send</button>
     </div>
   </form>
 </dialog>

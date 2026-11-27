@@ -53,8 +53,11 @@ dialog{border:1px solid var(--line);border-radius:10px;background:var(--bg);colo
 dialog::backdrop{background:rgba(0,0,0,.45)}
 .compose-head{display:flex;justify-content:space-between;align-items:center}
 .compose-head h2{margin:0}
-.editor{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
-.pane{display:flex;flex-direction:column;min-height:340px}
+.editor{margin-top:8px;position:relative}
+.panes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.editor:not(.enhanced) .panes{grid-template-columns:1fr}
+.editor:not(.enhanced) .pane-preview,.editor-tabs{display:none}
+.pane{display:flex;flex-direction:column;min-height:340px;position:relative}
 .pane-title{font-size:12px;color:var(--muted);margin-bottom:2px}
 .pane textarea{flex:1;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;min-height:340px}
 .preview{flex:1;border:1px solid var(--line);border-radius:6px;padding:8px 12px;overflow:auto;max-height:50vh}
@@ -74,4 +77,35 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .plain-list li{display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--line)}
 .events{width:100%;border-collapse:collapse;font-size:12px}
 .events td,.events th{text-align:left;padding:3px 6px;border-bottom:1px solid var(--line)}
-@media (max-width:900px){.layout{grid-template-columns:1fr}.folders{display:flex;overflow-x:auto;border-right:none;border-bottom:1px solid var(--line)}.list-pane{max-height:40vh}.editor{grid-template-columns:1fr}}
+.toolbar{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-bottom:6px}
+.toolbar button{padding:3px 9px;min-width:32px}
+.small{font-size:12px}
+.hint code{background:var(--card);padding:0 4px;border-radius:4px}
+.slash-menu{position:absolute;left:12px;top:44px;z-index:10;list-style:none;margin:0;padding:4px;min-width:200px;background:var(--bg);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18)}
+.slash-menu li{display:flex;gap:10px;align-items:center;padding:4px 8px;border-radius:5px;cursor:pointer}
+.slash-menu li.active,.slash-menu li:hover{background:var(--sel)}
+.slash-menu code{font-family:ui-monospace,Menlo,Consolas,monospace;min-width:70px}
+.preview.stale{opacity:.6}
+.md ul:has(> li > input[type=checkbox]){list-style:none;padding-left:1.2em}
+.md li > input[type=checkbox]{margin:0 .4em 0 -1.2em;width:auto;vertical-align:middle}
+.noscript{padding:16px;color:var(--err)}
+.checklist{border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:6px 0;background:var(--card)}
+.checklist-head{display:flex;justify-content:space-between;align-items:center}
+.checklist progress{width:100%;height:8px;margin:4px 0 6px;accent-color:var(--accent)}
+.checklist-items{list-style:none;margin:0;padding:0}
+.checklist-items li{padding:2px 0}
+.checklist-items label{display:flex;gap:8px;align-items:flex-start;margin:0;color:var(--fg);cursor:pointer}
+.checklist-items input{width:auto;margin-top:4px}
+.checklist-items li.done span{text-decoration:line-through;color:var(--muted)}
+.checklist-recipients{list-style:none;margin:4px 0;padding:0}
+.checklist-recipients li{padding:3px 0;border-top:1px solid var(--line)}
+.checklist .error:empty{display:none}
+@media (max-width:900px){.layout{grid-template-columns:1fr}.folders{display:flex;overflow-x:auto;border-right:none;border-bottom:1px solid var(--line)}.list-pane{max-height:40vh}
+.editor.enhanced .editor-tabs{display:flex;gap:4px;margin-bottom:6px}
+.editor-tabs button[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+.panes{grid-template-columns:1fr}
+.editor.enhanced[data-view=write] .pane-preview,.editor.enhanced[data-view=preview] .pane-write{display:none}
+.editor.enhanced[data-view=write] .toolbar{display:flex}
+.editor.enhanced[data-view=preview] .toolbar{display:none}
+.hint{display:none}
+.compose-foot{flex-wrap:wrap}}
