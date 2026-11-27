@@ -13,7 +13,7 @@ Invalid values stop the server at start-up with a list of every problem.
 |---|---|---|
 | `MDMAIL_HOSTNAME` | — (required) | FQDN of the server: EHLO name, MX target, web host, `Authentication-Results` authserv-id. Requests for any other `Host` are refused (421). |
 | `MDMAIL_DOMAINS` | — (required) | Comma-separated list of hosted mail domains. Only these domains are accepted as recipients on port 25. |
-| `MDMAIL_DATA_DIR` | `/data` | Database, secret key, DKIM keys and ACME cache. Mode 0700. |
+| `MDMAIL_DATA_DIR` | `/data` | Database, secret key, DKIM keys and ACME cache. Mode 0700. A relative path is resolved against the working directory at start; prefer an absolute path so the server and the admin CLI use the same database. |
 
 ## TLS
 

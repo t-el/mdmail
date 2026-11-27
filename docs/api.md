@@ -8,6 +8,8 @@ session cookie; scripts can use it by replaying the same headers.
 
 - All responses carry `Cache-Control: no-store`. Errors are
   `{"error": "message", "code": "optional_code"}` with an appropriate status.
+  State-changing requests that fail the CSRF token or origin check get
+  `403` with `code:"csrf_failed"`, never a credentials error.
 - Request bodies are JSON (`Content-Type: application/json`, max 256 KiB,
   unknown fields rejected) except `POST /api/send` (multipart).
 - **Authentication:** `POST /api/login` sets the `__Host-mdmail` cookie and
@@ -33,7 +35,7 @@ curl -b jar "$H/api/messages?folder=INBOX&limit=20"
 
 | Method & path | Body | Response |
 |---|---|---|
-| `POST /api/login` | `{"email","password","totp"?}` | `200 {"user":{"email","totp_enabled","is_admin"},"csrf"}`. `401` with `code:"totp_required"` when a second factor is needed. `401` for any other failure. `429` when rate limited. |
+| `POST /api/login` | `{"email","password","totp"?}` | `200 {"user":{"email","totp_enabled","is_admin"},"csrf"}`. `401` with `code:"totp_required"` when a second factor is needed. `401` with `code:"invalid_credentials"` and the single message "invalid email, password or code" for every credential failure (unknown user, wrong password or code, disabled or locked account); the precise reason is only logged server-side. `403` with `code:"origin_rejected"` when the request fails the same-origin check. `429` when rate limited. |
 | `GET /api/session` | — | Same shape as login, for an existing session. `401` if none. |
 | `POST /api/logout` | `{}` | `{"ok":true}`; deletes the server-side session. |
 

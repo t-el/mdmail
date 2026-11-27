@@ -5,6 +5,13 @@ Docker, run them with `docker compose exec mdmail mdmail <command>`. They
 operate directly on the database in `MDMAIL_DATA_DIR` and are safe to run
 while the server is up.
 
+They only open an **existing** database: run `mdmail serve` once first. If
+`MDMAIL_DATA_DIR` does not point at the server's database the command fails
+with `no mdmail database at …` instead of silently creating a second, empty
+one that the server never reads. Relative paths are resolved to absolute
+ones; the server prints the path it uses in its startup log (`"database"`),
+and `user add` prints the database it wrote to.
+
 | Command | Description |
 |---|---|
 | `mdmail serve` | Run the server. |
